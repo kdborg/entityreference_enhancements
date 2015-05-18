@@ -1,0 +1,116 @@
+<?php
+/**
+* @file
+* Provides extra functionality for Entity References, Node References, and User References.
+ *
+ * 1) It prevents a piece of content from being deleted when there is
+ * a reference to it.
+ *
+ * 2) It provides a place for bad references to be found.
+*/
+
+/**
+ * Implements hook_menu().
+ */
+function entityreference_enhancements_menu() {
+  $info = array();
+
+  $info['entityreference_enhancements'] = array(
+    'title' => t('Entity Reference Enhancements'),
+    'type' => MENU_NORMAL_ITEM,
+    'page callback' => 'entityreference_enhancements_output',
+    'access callback' => TRUE,
+  );
+
+  return $info;
+}
+
+function entityreference_enhancements_output() {
+  dpm(entity_get_info());
+  dpm(field_info_fields());
+  return 'Entity';
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id) {
+  $entity = NULL;
+  $type = 'user';
+  $id = -1;
+
+  //****TODO: Currently limited to node and user types.
+  $search_keys = array(
+    array('user', '#user', 'uid', 'cancel', t('Cancel account')),
+    array('node', '#node', 'nid', 'delete', t('Delete')),
+  );
+
+  foreach ($search_keys as $data) {
+
+    list($entity_type, $form_field_name, $obj_id, $btn_name, $btn_text) = $data;
+
+    if (array_key_exists($form_field_name, $form)) {
+      $entity = $form[$form_field_name];
+      $type = $entity_type;
+      $id = $entity->$obj_id;
+      $button_name = $btn_name;
+      $button_text = $btn_text;
+      break;
+    }
+  }
+
+  if ($entity == NULL) { return; }
+
+  $references = entityreference_enhancements_get_references_to($type, $id);
+
+  if (count($references) > 0) {
+
+    unset($form['actions'][$button_name]);
+
+    $form['actions']['delete'] = array(
+      '#type' => 'button',
+      '#disabled' => TRUE,
+      '#value' => '*' . $button_text,
+      '#weight' => 15,
+    );
+
+    $form['actions']['delete_message'] = array(
+      '#type' => 'markup',
+      '#markup' => '<p><sup>*</sup>This has been prevented due to data depending on this content.</p>',
+      '#weight' => 16,
+    );
+  }
+}
+
+function entityreference_enhancements_get_references_to($type, $id) {
+  $reference_ids = array();
+
+  $fields = field_info_fields();
+
+  foreach ($fields as $field => $data) {
+
+    if ($data['type'] != 'entityreference') {
+      continue; // Skip to the next field.
+    }
+
+    if ($data['settings']['target_type'] != $type) {
+      continue; // Skip to the next field.
+    }
+
+    //****TODO: Currently only works for SQL storage
+    $table = array_keys($data['storage']['details']['sql'][FIELD_LOAD_CURRENT])[0];
+    $field_name = $data['storage']['details']['sql'][FIELD_LOAD_CURRENT][$table]['target_id'];
+
+    $query = db_select($table, 't');
+    $query->addField('t', $field_name);
+    $query->condition($field_name, $id, '=');
+
+    $result = $query->execute();
+
+    foreach ($result as $row) {
+      $reference_ids[] = $row->$field_name;
+    }
+  }
+
+  return $reference_ids;
+}
