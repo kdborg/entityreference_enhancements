@@ -24,6 +24,7 @@ You can access this with the URL /bad_data off the base URL of your site.
 piece of content. 
 
 
-
+## Bugs or Suggestions
+I welcome suggestions and bugs.  Please use the issue tracker: [a link](https://github.com/kdborg/entityreference_enhancements/issues/)
 
 
