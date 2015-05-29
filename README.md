@@ -7,6 +7,7 @@ The module will prevent the deletion of Nodes, Taxonomy Terms, Taxonomy Vocabula
 is a reference to the content in question.  
 
 **Note**: Support for Comments depends on a bug fix.
+
 **Note**: Support for Files is coming.
 
 **Note**: This module prevents deletion of content in the UI only. **It is still possible to delete content through code
