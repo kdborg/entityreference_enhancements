@@ -46,34 +46,60 @@ function entityreference_enhancements_page_alter(&$page) {
  */
 function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id) {
   $entity = NULL;
-  $type = 'user';
   $id = -1;
   $found = FALSE;
+  $is_referenced = FALSE;
 
   if ($form_id == 'node_admin_content') {
     unset($form['admin']['options']['operation']['#options']['delete']);
     return;
   }
+
   //****TODO: Add support for File and Comment types.
   $search_keys = array(
-    array('user', '#user', 'uid', 'cancel'),
-    array('node', '#node', 'nid', 'delete'),
-    array('taxonomy_term', '#term', 'tid', 'delete'),
-    array('taxonomy_vocabulary', '#vocabulary', 'vid', 'delete'),
+    array(
+      'type' => 'user',
+      'entity' => '#user',
+      'entity_id' => 'uid',
+      'button' => 'submit',
+      'id' => 'user-profile-form',
+    ),
+    array(
+      'type' => 'node',
+      'entity' => '#node',
+      'entity_id' => 'nid',
+      'button' => 'delete',
+      'id' => 'page-node-form',
+    ),
+    array(
+      'type' => 'taxonomy_term',
+      'entity' => '#term',
+      'entity_id' => 'tid',
+      'button' => 'delete',
+      'id' => 'taxonomy-form-term'
+    ),
+    array(
+      'type' => 'taxonomy_vocabulary',
+      'entity' => '#vocabulary',
+      'entity_id' => 'vid',
+      'button' => 'delete',
+      'id' => 'taxonomy-form-vocabulary',
+    ),
   );
 
   foreach ($search_keys as $data) {
 
-    list($entity_type, $form_field_name, $obj_id, $btn_name) = $data;
+    if ($form['#id'] == $data['id']) {
+      $entity = $form[$data['entity']];
 
-    if (array_key_exists($form_field_name, $form)) {
-      $entity = $form[$form_field_name];
-      $type = $entity_type;
-      $id = $form[$obj_id];
-      $button_name = $btn_name;
-      $button_text = '';
-      if (isset($form['actions'][$btn_name])) {
-        $button_text = $form['actions'][$btn_name]['#value'];
+      if (is_object($entity)) {
+        $id = $entity->$data['entity_id'];
+      } else {
+        $id = $entity[$data['entity_id']];
+      }
+
+      if (isset($form['actions'][$data['button']])) {
+        $button_text = $form['actions'][$data['button']]['#value'];
       }
     }
 
@@ -83,16 +109,15 @@ function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id)
       $id = $id['#value'];
     }
 
-    $references = entityreference_enhancements_get_references_to($type, $id);
+    $is_referenced = entityreference_enhancements_get_references_to($data['type'], $id);
 
-    if (count($references) > 0) {
-      $found = TRUE;
+    if ($is_referenced) {
       break;
     }
   }
 
-  if ($found) {
-    unset($form['actions'][$button_name]);
+  if ($is_referenced) {
+    unset($form['actions'][$data['button']]);
 
     $form['actions']['delete'] = array(
       '#type' => 'button',
@@ -107,12 +132,14 @@ function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id)
       '#weight' => 16,
     );
   }
-
-
 }
 
+/**
+ * @param $type The type of entity being referenced.
+ * @param $id The id of the entity being referenced.
+ * @return bool TRUE if there are references to this type. FALSE, otherwise.
+ */
 function entityreference_enhancements_get_references_to($type, $id) {
-  $reference_ids = array();
 
   $fields = field_info_fields();
 
@@ -131,17 +158,39 @@ function entityreference_enhancements_get_references_to($type, $id) {
     $field_name = $data['storage']['details']['sql'][FIELD_LOAD_CURRENT][$table]['target_id'];
 
     $query = db_select($table, 't');
-    $query->addField('t', $field_name);
+    $query->fields('t', array('entity_id', $field_name));
     $query->condition($field_name, $id, '=');
 
     $result = $query->execute();
 
-    foreach ($result as $row) {
-      $reference_ids[] = $row->$field_name;
+    if ($result->rowCount() > 0) {
+      return TRUE;
+    }
+
+    if ($type == 'taxonomy_vocabulary') {
+      $query = db_select('taxonomy_term_data', 't')
+        ->fields('t', array('tid'))
+        ->condition('vid', $id, '=');
+
+      $result = $query->execute();
+
+      $ids = array(-1);
+      foreach ($result as $row) {
+        $ids[] = $row->tid;
+      }
+
+      $query = db_select($table, 't')
+        ->fields('t', array($field_name))
+        ->condition($field_name, $ids, 'IN');
+
+      $result = $query->execute();
+      if ($result->rowCount() > 0) {
+        return TRUE;
+      }
     }
   }
 
-  return $reference_ids;
+  return FALSE;
 }
 
 /**
@@ -220,7 +269,7 @@ function entityreference_enhancements_bad_data() {
           foreach ($entity_ids as $entity_type_id => $ids) {
             if (in_array($entity_id, $ids)) {
               $entity = entity_load($entity_type_id, array($entity_id))[$entity_id];
-kpr($entity);
+
               $bad[$key]['links'][] = array(
                 '#type' => 'link',
                 '#href' => $entity_type_id . '/' . $entity_id,
