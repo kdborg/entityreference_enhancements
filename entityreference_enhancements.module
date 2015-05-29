@@ -38,33 +38,43 @@ function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id)
   $entity = NULL;
   $type = 'user';
   $id = -1;
+  $found = FALSE;
 
   //****TODO: Currently limited to node and user types.
   $search_keys = array(
-    array('user', '#user', 'uid', 'cancel', t('Cancel account')),
-    array('node', '#node', 'nid', 'delete', t('Delete')),
+    array('user', '#user', 'uid', 'cancel'),
+    array('node', '#node', 'nid', 'delete'),
+    array('taxonomy_term', '#term', 'tid', 'delete'),
+    array('taxonomy_vocabulary', '#vocabulary', 'vid', 'delete'),
   );
 
   foreach ($search_keys as $data) {
 
-    list($entity_type, $form_field_name, $obj_id, $btn_name, $btn_text) = $data;
+    list($entity_type, $form_field_name, $obj_id, $btn_name) = $data;
 
     if (array_key_exists($form_field_name, $form)) {
       $entity = $form[$form_field_name];
       $type = $entity_type;
-      $id = $entity->$obj_id;
+      $id = $form[$obj_id];
       $button_name = $btn_name;
-      $button_text = $btn_text;
+      $button_text = $form['actions'][$btn_name]['#value'];
+    }
+
+    if ($entity == NULL) { continue; }
+
+    if (is_array($id)) {
+      $id = $id['#value'];
+    }
+
+    $references = entityreference_enhancements_get_references_to($type, $id);
+
+    if (count($references) > 0) {
+      $found = TRUE;
       break;
     }
   }
 
-  if ($entity == NULL) { return; }
-
-  $references = entityreference_enhancements_get_references_to($type, $id);
-
-  if (count($references) > 0) {
-
+  if ($found) {
     unset($form['actions'][$button_name]);
 
     $form['actions']['delete'] = array(
@@ -76,10 +86,12 @@ function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id)
 
     $form['actions']['delete_message'] = array(
       '#type' => 'markup',
-      '#markup' => '<p><sup>*</sup>This has been prevented due to data depending on this content.</p>',
+      '#markup' => '<p><sup>*</sup>' . t('This has been prevented due to data depending on this content.') . '</p>',
       '#weight' => 16,
     );
   }
+
+
 }
 
 function entityreference_enhancements_get_references_to($type, $id) {
