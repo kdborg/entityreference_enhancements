@@ -1,0 +1,7 @@
+name = Entity Reference Enhancements
+description = Provides extra functionality for Entity References, Node References, and User References.
+core = 7.x
+package = Fields
+
+dependencies[] = entityreference
+

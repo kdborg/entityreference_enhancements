@@ -1,0 +1,286 @@
+<?php
+/**
+* @file
+* Provides extra functionality for Entity References, Node References, and User References.
+ *
+ * 1) It prevents a piece of content from being deleted when there is
+ * a reference to it.
+ *
+ * 2) It provides a place for bad references to be found.
+*/
+
+/**
+ * Implements hook_page_alter().
+ */
+function entityreference_enhancements_page_alter(&$page) {
+
+  if (isset($page['content']['system_main']['#form_id'])) {
+    $form_id = $page['content']['system_main']['#form_id'];
+    $system_main = &$page['content']['system_main'];
+
+    if ($form_id == 'node_admin_content') {
+
+      foreach ($system_main['admin']['nodes']['#options'] as $nid => $node) {
+        unset($system_main['admin']['nodes']['#options'][$nid]['operations']['data']['#links']['delete']);
+      }
+      return;
+    }
+
+    if ($system_main['#form_id'] == 'node_delete_confirm') {
+      if ($system_main['actions']['submit']['#value'] == t('Delete')
+        && isset($system_main['actions']['delete_message'])
+      ) {
+
+        $title = $system_main['actions']['submit']['#value'];
+        unset($system_main['actions']['submit']);
+        $page['content']['system_main']['actions']['delete']['#value'] .= $title;
+        $page['content']['system_main']['actions']['delete']['#weight'] = -1;
+        return;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function entityreference_enhancements_form_alter(&$form, &$form_state, $form_id) {
+  $entity = NULL;
+  $id = -1;
+  $found = FALSE;
+  $is_referenced = FALSE;
+
+  if ($form_id == 'node_admin_content') {
+    unset($form['admin']['options']['operation']['#options']['delete']);
+    return;
+  }
+
+  //****TODO: Add support for File and Comment types.
+  $search_keys = array(
+    array(
+      'type' => 'user',
+      'entity' => '#user',
+      'entity_id' => 'uid',
+      'button' => 'submit',
+      'id' => 'user-profile-form',
+    ),
+    array(
+      'type' => 'node',
+      'entity' => '#node',
+      'entity_id' => 'nid',
+      'button' => 'delete',
+      'id' => 'page-node-form',
+    ),
+    array(
+      'type' => 'taxonomy_term',
+      'entity' => '#term',
+      'entity_id' => 'tid',
+      'button' => 'delete',
+      'id' => 'taxonomy-form-term'
+    ),
+    array(
+      'type' => 'taxonomy_vocabulary',
+      'entity' => '#vocabulary',
+      'entity_id' => 'vid',
+      'button' => 'delete',
+      'id' => 'taxonomy-form-vocabulary',
+    ),
+  );
+
+  foreach ($search_keys as $data) {
+
+    if ($form['#id'] == $data['id']) {
+      $entity = $form[$data['entity']];
+
+      if (is_object($entity)) {
+        $id = $entity->$data['entity_id'];
+      } else {
+        $id = $entity[$data['entity_id']];
+      }
+
+      if (isset($form['actions'][$data['button']])) {
+        $button_text = $form['actions'][$data['button']]['#value'];
+      }
+    }
+
+    if ($entity == NULL) { continue; }
+
+    if (is_array($id)) {
+      $id = $id['#value'];
+    }
+
+    $is_referenced = entityreference_enhancements_get_references_to($data['type'], $id);
+
+    if ($is_referenced) {
+      break;
+    }
+  }
+
+  if ($is_referenced) {
+    unset($form['actions'][$data['button']]);
+
+    $form['actions']['delete'] = array(
+      '#type' => 'button',
+      '#disabled' => TRUE,
+      '#value' => '*' . $button_text,
+      '#weight' => 15,
+    );
+
+    $form['actions']['delete_message'] = array(
+      '#type' => 'markup',
+      '#markup' => '<p><sup>*</sup>' . t('This has been prevented due to data depending on this content.') . '</p>',
+      '#weight' => 16,
+    );
+  }
+}
+
+/**
+ * @param $type The type of entity being referenced.
+ * @param $id The id of the entity being referenced.
+ * @return bool TRUE if there are references to this type. FALSE, otherwise.
+ */
+function entityreference_enhancements_get_references_to($type, $id) {
+
+  $fields = field_info_fields();
+
+  foreach ($fields as $field => $data) {
+
+    if ($data['type'] != 'entityreference') {
+      continue; // Skip to the next field.
+    }
+
+    if ($data['settings']['target_type'] != $type) {
+      continue; // Skip to the next field.
+    }
+
+    //****TODO: Currently only works for SQL storage
+    $table = array_keys($data['storage']['details']['sql'][FIELD_LOAD_CURRENT])[0];
+    $field_name = $data['storage']['details']['sql'][FIELD_LOAD_CURRENT][$table]['target_id'];
+
+    $query = db_select($table, 't');
+    $query->fields('t', array('entity_id', $field_name));
+    $query->condition($field_name, $id, '=');
+
+    $result = $query->execute();
+
+    if ($result->rowCount() > 0) {
+      return TRUE;
+    }
+
+    if ($type == 'taxonomy_vocabulary') {
+      $query = db_select('taxonomy_term_data', 't')
+        ->fields('t', array('tid'))
+        ->condition('vid', $id, '=');
+
+      $result = $query->execute();
+
+      $ids = array(-1);
+      foreach ($result as $row) {
+        $ids[] = $row->tid;
+      }
+
+      $query = db_select($table, 't')
+        ->fields('t', array($field_name))
+        ->condition($field_name, $ids, 'IN');
+
+      $result = $query->execute();
+      if ($result->rowCount() > 0) {
+        return TRUE;
+      }
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function entityreference_enhancements_menu() {
+  $items = array();
+
+  $items['bad_data'] = array(
+    'page callback' => 'entityreference_enhancements_bad_data',
+    'type' => MENU_NORMAL_ITEM,
+    'access callback' => TRUE,
+  );
+  return $items;
+}
+
+function entityreference_enhancements_bad_data() {
+  $fields = field_info_fields();
+
+  $entities = entity_get_info();
+
+  $entity_ids = array();
+  foreach ($entities as $entity_type => $entity_data) {
+    $result = db_select($entity_data['base table'], 't')
+      ->fields('t', array($entity_data['entity keys']['id']))
+      ->execute();
+
+    $ids = array();
+    foreach ($result as $row) {
+      $ids[] = $row->$entity_data['entity keys']['id'];
+    }
+    $entity_ids[$entity_type] = $ids;
+  }
+
+  $bad = array();
+
+  foreach ($fields as $field => $data) {
+
+    if ($data['type'] != 'entityreference') {
+      continue; // Skip to the next field.
+    }
+
+    foreach ($data['bundles'] as $entity_type => $bundle_type) {
+
+      foreach ($bundle_type as $bundle) {
+        $key = $entity_type . '_' . $bundle . '_' . $field;
+
+        $title = $entities[$entity_type]['label'] . ' - '
+            . $entities[$entity_type]['bundles'][$bundle]['label'] . ' - '
+            . field_info_instance($entity_type, $field, $bundle)['label'];
+
+        $bad[$key] = array(
+          '#type' => 'container',
+        );
+
+        $bad[$key]['title'] = array(
+          '#type' => 'markup',
+          '#markup' => '<h3>' . $title . '</h3>',
+        );
+
+        $source_table = array_keys($fields[$field]['storage']['details']['sql'][FIELD_LOAD_CURRENT])[0];
+
+        $source_field = $fields[$field]['storage']['details']['sql'][FIELD_LOAD_CURRENT][$source_table]['target_id'];
+        $target_type = $fields[$field]['settings']['target_type'];
+
+        $query = db_select($source_table, 't')
+          ->fields('t', array($source_field, 'entity_id'))
+          ->condition($source_field, $entity_ids[$target_type], 'NOT IN');
+
+        $result = $query->execute();
+
+        foreach ($result as $row) {
+          $entity_id = $row->entity_id;
+          $reference_id = $row->$source_field;
+
+          foreach ($entity_ids as $entity_type_id => $ids) {
+            if (in_array($entity_id, $ids)) {
+              $entity = entity_load($entity_type_id, array($entity_id))[$entity_id];
+
+              $bad[$key]['links'][] = array(
+                '#type' => 'link',
+                '#href' => $entity_type_id . '/' . $entity_id,
+                '#title' => $entity->title . ': Missing reference to ' . $target_type . '  ' . $reference_id,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return $bad;
+}
