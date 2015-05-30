@@ -1,4 +1,4 @@
-# entityreference_enhancements
+# Entity Reference Enhancements
 This is a Drupal 7 module for preventing data from being deleted if there is an Entity Reference to it.  The module 
 also finds Entity References that reference missing entities.
 
